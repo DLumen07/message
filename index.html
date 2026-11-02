@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Message</title>
+<meta property="og:title" content="Message">
+<style>
+  :root { --bg:#fff; --ink:#111827; --line:#D1D5DB; --error:#DC2626; color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111318; --ink:#E5E7EB; --line:#3F4451; --error:#F87171; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; place-items: center; padding: 24px 20px;
+  }
+  .pins { display: flex; gap: 8px; }
+  .pins input {
+    width: 44px; height: 54px; text-align: center; font-size: 24px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: transparent; color: var(--ink);
+    -webkit-text-security: disc;
+  }
+  .pins input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .pins.wrong input { border-color: var(--error); }
+  .message { display: none; max-width: 520px; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="pins" id="pins">
+  <input inputmode="numeric" maxlength="1" aria-label="Digit 1" autocomplete="one-time-code" autofocus>
+  <input inputmode="numeric" maxlength="1" aria-label="Digit 2">
+  <input inputmode="numeric" maxlength="1" aria-label="Digit 3">
+  <input inputmode="numeric" maxlength="1" aria-label="Digit 4">
+  <input inputmode="numeric" maxlength="1" aria-label="Digit 5">
+  <input inputmode="numeric" maxlength="1" aria-label="Digit 6">
+</div>
+<div class="message" id="message"></div>
+
+<script>
+/* ============ EDIT THESE ============ */
+const CONFIG = {
+  LOG_URL: "https://script.google.com/macros/s/AKfycbyk_8l2rcF8m_0DROsauXpMrHyudXuBbdGkho2B9CRMq2twaoymf8tC_j1RAcV8Yjr_gA/exec",
+  // Output of encrypt.html. Demo code is 123456.
+  ENCRYPTED: {"iter":300000,"salt":"FreYaRAQ5dF9pbVa+M0Hhw==","iv":"m0KhFrCvsogIUtzP","data":"wevPY7/Fe8tLDNSdBvz8A7vgSJAtxdNI5vyZm85YJQN9uICNAgAmzisqY6efWBEVATjy5BF2GxiYOgatKbxTd6MuoM21VJOYY6aL+RYH/ThE2Tuu8o5HunyttPfxDeqVtqoW6HPBvPM5"}
+};
+/* ==================================== */
+
+// Same browser = same visitor ID, so repeat visits are linked
+let visitorId = "", visitCount = 1;
+try {
+  visitorId = localStorage.getItem("vid") || Math.random().toString(36).slice(2, 10);
+  visitCount = (+localStorage.getItem("vcount") || 0) + 1;
+  localStorage.setItem("vid", visitorId);
+  localStorage.setItem("vcount", visitCount);
+} catch { visitorId = "no-storage"; }
+
+function log(event) {
+  if (!CONFIG.LOG_URL || CONFIG.LOG_URL.startsWith("PASTE")) return;
+  fetch(CONFIG.LOG_URL, {
+    method: "POST", mode: "no-cors", keepalive: true,
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      event, visitor: visitorId, visit: visitCount,
+      ua: navigator.userAgent,
+      screen: `${screen.width}x${screen.height}`,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ref: document.referrer
+    })
+  }).catch(() => {});
+}
+log("opened");
+
+const pins = [...document.querySelectorAll("#pins input")];
+pins.forEach((inp, i) => {
+  inp.addEventListener("input", () => {
+    inp.value = inp.value.replace(/\D/g, "").slice(-1);
+    document.getElementById("pins").classList.remove("wrong");
+    if (inp.value && i < 5) pins[i + 1].focus();
+    tryUnlock();
+  });
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Backspace" && !inp.value && i > 0) pins[i - 1].focus();
+  });
+  inp.addEventListener("paste", e => {
+    const d = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 6);
+    if (!d) return;
+    e.preventDefault();
+    d.split("").forEach((c, j) => pins[j].value = c);
+    pins[Math.min(d.length, 5)].focus();
+    tryUnlock();
+  });
+});
+
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function decrypt(pin) {
+  const { iter, salt, iv, data } = CONFIG.ENCRYPTED;
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: unb64(salt), iterations: iter, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  return new TextDecoder().decode(
+    await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, key, unb64(data)));
+}
+
+let busy = false, fails = 0, lockedUntil = 0;
+async function tryUnlock() {
+  const pin = pins.map(p => p.value).join("");
+  if (pin.length < 6 || busy || Date.now() < lockedUntil) return;
+  busy = true;
+  pins.forEach(p => p.disabled = true);
+  try {
+    const text = await decrypt(pin);
+    log("unlocked");
+    document.getElementById("pins").style.display = "none";
+    const m = document.getElementById("message");
+    m.textContent = text;
+    m.style.display = "block";
+  } catch {
+    log("wrong_pin");
+    if (++fails % 5 === 0) lockedUntil = Date.now() + 30000;
+    document.getElementById("pins").classList.add("wrong");
+    pins.forEach(p => { p.value = ""; p.disabled = false; });
+    pins[0].focus();
+  } finally { busy = false; }
+}
+</script>
+</body>
+</html>
